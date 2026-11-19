@@ -64,6 +64,20 @@ public final class VideoPublishOptions: NSObject, TrackPublishOptions, Sendable 
         self.streamName = streamName
     }
 
+    /// These options with another encoding for the kind of track that is published.
+    func replacing(encoding newEncoding: VideoEncoding, isScreenShare: Bool) -> VideoPublishOptions {
+        VideoPublishOptions(name: name,
+                            encoding: isScreenShare ? encoding : newEncoding,
+                            screenShareEncoding: isScreenShare ? newEncoding : screenShareEncoding,
+                            simulcast: simulcast,
+                            simulcastLayers: simulcastLayers,
+                            screenShareSimulcastLayers: screenShareSimulcastLayers,
+                            preferredCodec: preferredCodec,
+                            preferredBackupCodec: preferredBackupCodec,
+                            degradationPreference: degradationPreference,
+                            streamName: streamName)
+    }
+
     // MARK: - Equal
 
     override public func isEqual(_ object: Any?) -> Bool {

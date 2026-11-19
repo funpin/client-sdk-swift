@@ -308,6 +308,9 @@ extension RTC {
             // VideoEncoding specific
             if let videoEncoding = encoding as? VideoEncoding {
                 result.maxFramerate = NSNumber(value: videoEncoding.maxFps)
+                if videoEncoding.minBitrate > 0 {
+                    result.minBitrateBps = NSNumber(value: videoEncoding.minBitrate)
+                }
             }
         }
 

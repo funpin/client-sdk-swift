@@ -17,6 +17,8 @@
 import Combine
 import Foundation
 
+internal import LiveKitWebRTC
+
 @objcMembers
 public class LocalTrackPublication: TrackPublication, @unchecked Sendable {
     // indicates whether the track was suspended(muted) by the SDK
@@ -90,6 +92,63 @@ extension LocalTrackPublication {
         guard _suspended else { return }
         try await unmute()
         _suspended = false
+    }
+}
+
+public extension LocalTrackPublication {
+    /// Changes the encoding of a published video track — its bitrate ceiling and floor and
+    /// its frame rate ceiling — without publishing the track again.
+    ///
+    /// The encoding replaces the one the track was published with
+    /// (``VideoPublishOptions/screenShareEncoding`` for a screen share,
+    /// ``VideoPublishOptions/encoding`` otherwise), so whatever re-computes the sender's
+    /// parameters later — the captured size changing, a backup codec published for a
+    /// subscriber — uses it too. Subscribers see no interruption.
+    ///
+    /// ```swift
+    /// try await publication.set(videoEncoding: VideoEncoding(maxBitrate: 4_000_000, maxFps: 30))
+    /// ```
+    ///
+    /// - Throws: ``LiveKitError`` when the publication has no local video track or is no
+    ///   longer in a room.
+    func set(videoEncoding: VideoEncoding) async throws {
+        guard let track = track as? LocalVideoTrack else {
+            throw LiveKitError(.invalidState, message: "The publication has no local video track")
+        }
+        let participant = try await requireParticipant()
+        let room = try participant.requireRoom()
+        let current = (track.publishOptions as? VideoPublishOptions) ?? room._state.roomOptions.defaultVideoPublishOptions
+        let updated = current.replacing(encoding: videoEncoding, isScreenShare: track.source == .screenShareVideo)
+        track._state.mutate { $0.lastPublishOptions = updated }
+        await recomputeSenderParameters()
+    }
+}
+
+extension LocalTrackPublication {
+    /// Writes `encodings` into the sender's parameters, matching them by rid.
+    @RTC
+    private static func apply(_ encodings: [LKRTCRtpEncodingParameters], to sender: RTCSender) {
+        let parameters = sender.raw.parameters
+
+        for current in parameters.encodings {
+            if let updated = encodings.first(where: { $0.rid == current.rid }) {
+                current.isActive = updated.isActive
+                current.scaleResolutionDownBy = updated.scaleResolutionDownBy
+                current.maxBitrateBps = updated.maxBitrateBps
+                current.minBitrateBps = updated.minBitrateBps
+                current.maxFramerate = updated.maxFramerate
+            } else {
+                current.isActive = false
+                current.scaleResolutionDownBy = nil
+                current.maxBitrateBps = nil
+                current.minBitrateBps = nil
+            }
+        }
+
+        sender.raw.parameters = parameters
+
+        // Logged from the local copy: each `parameters` read is another signaling-thread round-trip.
+        log("Using encodings: \(parameters.encodings), degradationPreference: \(String(describing: parameters.degradationPreference))")
     }
 }
 
@@ -180,9 +239,6 @@ extension LocalTrackPublication {
 
         log("Re-computing sender parameters, dimensions: \(String(describing: track.capturer.dimensions))")
 
-        // get current parameters
-        let parameters = sender.raw.parameters
-
         guard let participant, let room = participant._room else { return }
         let publishOptions = (track.publishOptions as? VideoPublishOptions) ?? room._state.roomOptions.defaultVideoPublishOptions
 
@@ -193,27 +249,17 @@ extension LocalTrackPublication {
 
         log("Computed encodings: \(encodings)")
 
-        for current in parameters.encodings {
-            //
-            if let updated = encodings.first(where: { $0.rid == current.rid }) {
-                // update parameters for matching rid
-                current.isActive = updated.isActive
-                current.scaleResolutionDownBy = updated.scaleResolutionDownBy
-                current.maxBitrateBps = updated.maxBitrateBps
-                current.maxFramerate = updated.maxFramerate
-            } else {
-                current.isActive = false
-                current.scaleResolutionDownBy = nil
-                current.maxBitrateBps = nil
-                current.maxBitrateBps = nil
-            }
+        Self.apply(encodings, to: sender)
+
+        // A backup codec is published over a sender of its own, with encodings computed for
+        // that codec: it follows the same options.
+        for (codec, additionalSender) in track._state.rtpSenderForCodec {
+            let additionalEncodings = Utils.computeVideoEncodings(dimensions: dimensions,
+                                                                  publishOptions: publishOptions,
+                                                                  isScreenShare: track.source == .screenShareVideo,
+                                                                  overrideVideoCodec: codec)
+            Self.apply(additionalEncodings, to: additionalSender)
         }
-
-        // set the updated parameters
-        sender.raw.parameters = parameters
-
-        // Logged from the local copy: each `parameters` read is another signaling-thread round-trip.
-        log("Using encodings: \(parameters.encodings), degradationPreference: \(String(describing: parameters.degradationPreference))")
 
         // Report updated encodings to server
 

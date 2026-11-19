@@ -71,7 +71,30 @@ public class LocalAudioTrack: Track, LocalTrackProtocol, AudioTrackProtocol, @un
         await RTC.run { _createTrack(name: name, options: options, reportStatistics: reportStatistics) }
     }
 
+    /// Creates an audio track that is published under `source`.
+    ///
+    /// Every local audio track carries what the audio engine captures, so the source is a label
+    /// and not a second input: it is what the server checks against the token's
+    /// `canPublishSources` and what subscribers see. Use ``Track/Source/screenShareAudio`` for
+    /// audio the app supplies itself through ``MixerEngineObserver/capture(appAudio:)`` in manual
+    /// rendering mode (``AudioManager/setManualRenderingMode(_:)``), where no device is opened.
+    ///
+    /// ```swift
+    /// try AudioManager.shared.setManualRenderingMode(true)
+    /// let track = await LocalAudioTrack.createTrack(name: Track.screenShareAudioName, source: .screenShareAudio)
+    /// try await room.localParticipant.publish(audioTrack: track)
+    /// AudioManager.shared.mixer.capture(appAudio: buffer) // continuously
+    /// ```
+    public static func createTrack(name: String,
+                                   source: Track.Source,
+                                   options: AudioCaptureOptions? = nil,
+                                   reportStatistics: Bool = false) async -> LocalAudioTrack
+    {
+        await RTC.run { _createTrack(name: name, source: source, options: options, reportStatistics: reportStatistics) }
+    }
+
     static func _createTrack(name: String,
+                             source: Track.Source = .microphone,
                              options: AudioCaptureOptions?,
                              reportStatistics: Bool) -> LocalAudioTrack
     {
@@ -98,7 +121,7 @@ public class LocalAudioTrack: Track, LocalTrackProtocol, AudioTrackProtocol, @un
         let mediaTrack = RTCMediaTrack(rtcTrack)
 
         return LocalAudioTrack(name: name,
-                               source: .microphone,
+                               source: source,
                                track: mediaTrack,
                                reportStatistics: reportStatistics,
                                captureOptions: options)
